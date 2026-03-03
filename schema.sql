@@ -59,3 +59,16 @@ CREATE TABLE delivery (
     donation_id             INT          UNIQUE REFERENCES donation(id),
     blood_recipient_clinic_id INT        REFERENCES blood_recipient_clinic(id)
 );
+
+
+-- Requests from recipient clinics (extra needed by HW1 rubric)
+
+CREATE TABLE blood_request (
+    id                      SERIAL PRIMARY KEY,
+    request_date            DATE         NOT NULL,
+    blood_recipient_clinic_id INT        NOT NULL REFERENCES blood_recipient_clinic(id),
+    blood_type              VARCHAR(5)   NOT NULL,
+    amount_ml               NUMERIC(6,2) NOT NULL CHECK (amount_ml > 0),
+    status                  VARCHAR(10)  NOT NULL CHECK (status IN ('OPEN','FULFILLED','CANCELLED')),
+    fulfilled_by_donation_id INT         UNIQUE REFERENCES donation(id)  -- NULL if unfulfilled
+);
