@@ -129,3 +129,121 @@ JOIN clinic c ON c.id = dn.clinic_id
 JOIN blood_recipient_clinic brc ON brc.id = del.blood_recipient_clinic_id
 LEFT JOIN zip z ON z.zip = brc.zip
 ORDER BY del.date DESC, del.id ASC;
+
+
+-- =========================================================
+-- Part 2: SQL Analytics & Operational Insights
+-- Works with current schema: donor, donation, doctor, clinic, delivery,
+-- blood_recipient_clinic, blood_request, zip
+-- =========================================================
+
+-- B1 (Operational): Upcoming OPEN requests (next 7 days window)
+-- Day-to-day view of what is currently pending.
+SELECT
+  r.id AS request_id,
+  r.request_date,
+  brc.name AS recipient_clinic,
+  z.city,
+  r.blood_type,
+  r.amount_ml,
+  r.status
+FROM blood_request r
+JOIN blood_recipient_clinic brc ON brc.id = r.blood_recipient_clinic_id
+LEFT JOIN zip z ON z.zip = brc.zip
+WHERE r.status = 'OPEN'
+  AND r.request_date >= CURRENT_DATE - INTERVAL '7 days'
+ORDER BY r.request_date DESC, r.amount_ml DESC;
+
+
+-- B2 (Operational): Latest donations with full context (3+ tables JOIN)
+-- Active items view: what has been collected recently and where.
+SELECT
+  dn.id AS donation_id,
+  dn.date AS donation_date,
+  dn.amount_ml,
+  donor.first_name || ' ' || donor.last_name AS donor_name,
+  donor.blood_type,
+  doc.first_name || ' ' || doc.last_name AS doctor_name,
+  c.name AS donation_center
+FROM donation dn
+JOIN donor ON donor.id = dn.donor_id
+JOIN doctor doc ON doc.id = dn.doctor_id
+JOIN clinic c ON c.id = dn.clinic_id
+WHERE dn.date >= CURRENT_DATE - INTERVAL '14 days'
+ORDER BY dn.date DESC, dn.amount_ml DESC;
+
+
+-- B3 (Analytical): Top recipient clinics by total requested volume (last 30 days)
+-- Aggregation + top-N ranking.
+SELECT
+  brc.id AS recipient_clinic_id,
+  brc.name AS recipient_clinic,
+  COALESCE(z.city, 'Unknown') AS city,
+  COUNT(*) AS requests_cnt,
+  SUM(r.amount_ml) AS total_requested_ml
+FROM blood_request r
+JOIN blood_recipient_clinic brc ON brc.id = r.blood_recipient_clinic_id
+LEFT JOIN zip z ON z.zip = brc.zip
+WHERE r.request_date >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY brc.id, brc.name, COALESCE(z.city, 'Unknown')
+ORDER BY total_requested_ml DESC
+LIMIT 10;
+
+
+-- B4 (Analytical): Donation center performance (donations + donors count) last 30 days
+-- Cohort-like comparison across centers.
+SELECT
+  c.id AS clinic_id,
+  c.name AS donation_center,
+  COUNT(dn.id) AS donations_cnt,
+  SUM(dn.amount_ml) AS total_collected_ml,
+  COUNT(DISTINCT dn.donor_id) AS unique_donors_cnt
+FROM donation dn
+JOIN clinic c ON c.id = dn.clinic_id
+WHERE dn.date >= CURRENT_DATE - INTERVAL '30 days'
+GROUP BY c.id, c.name
+ORDER BY total_collected_ml DESC, donations_cnt DESC;
+
+
+-- B5 (Analytical + Window function): Donor leaderboard (top donors by volume)
+-- Window function requirement.
+SELECT
+  donor_id,
+  donor_name,
+  blood_type,
+  total_donated_ml,
+  donations_cnt,
+  DENSE_RANK() OVER (ORDER BY total_donated_ml DESC) AS volume_rank
+FROM (
+  SELECT
+    d.id AS donor_id,
+    d.first_name || ' ' || d.last_name AS donor_name,
+    d.blood_type,
+    SUM(dn.amount_ml) AS total_donated_ml,
+    COUNT(dn.id) AS donations_cnt
+  FROM donor d
+  JOIN donation dn ON dn.donor_id = d.id
+  GROUP BY d.id, d.first_name, d.last_name, d.blood_type
+) t
+ORDER BY volume_rank, donor_name
+LIMIT 20;
+
+
+-- B6 (Analytical + CTE): Fulfillment rate of requests by blood type (last 60 days)
+-- CTE requirement (WITH).
+WITH req AS (
+  SELECT
+    blood_type,
+    COUNT(*) AS total_requests,
+    SUM(CASE WHEN status = 'FULFILLED' THEN 1 ELSE 0 END) AS fulfilled_requests
+  FROM blood_request
+  WHERE request_date >= CURRENT_DATE - INTERVAL '60 days'
+  GROUP BY blood_type
+)
+SELECT
+  blood_type,
+  total_requests,
+  fulfilled_requests,
+  ROUND(100.0 * fulfilled_requests / NULLIF(total_requests, 0), 1) AS fulfillment_rate_pct
+FROM req
+ORDER BY fulfillment_rate_pct DESC NULLS LAST, total_requests DESC;
